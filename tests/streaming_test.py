@@ -3724,11 +3724,15 @@ class StreamClientTest(asynctest.TestCase):
         failed_response = self.success_response(3, 'ACCT_ACTIVITY', 'SUBS')
         failed_response['response'][0]['content']['code'] = 21
 
+        async def delayedvalue(delay, value):
+            await asyncio.sleep(delay)
+            return value
+
         socket.recv.side_effect = [
-            json.dumps(self.success_response(1, 'CHART_EQUITY', 'SUBS')),
-            json.dumps(self.success_response(2, 'ACCT_ACTIVITY', 'SUBS')),
-            json.dumps(failed_response),
-            json.dumps(stream_item)]
+            delayedvalue(0, json.dumps(self.success_response(1, 'CHART_EQUITY', 'SUBS'))),
+            delayedvalue(0.3, json.dumps(failed_response)),
+            delayedvalue(0.3, json.dumps(self.success_response(2, 'ACCT_ACTIVITY', 'SUBS'))),
+            delayedvalue(0, json.dumps(stream_item))]
 
         await asyncio.gather(
             main_loop(self),
