@@ -106,6 +106,8 @@ class StreamClient(EnumEnforcer):
         # List with requests waiting confirmation
         self._pending_requests = {}
 
+        self._message_lock = asyncio.Lock()
+
         # Logging-related fields
         self.logger = get_logger()
         self.request_number = 0
@@ -206,12 +208,44 @@ class StreamClient(EnumEnforcer):
         return request, request_id
 
     async def _send_and_await_response(self, request):
-        self._pending_requests[request['requestid']] = request
+        self._pending_requests[request['requestid']] = {
+            'request': request,
+            'event': asyncio.Event()
+        }
         await self._send({'requests': [request]})
         while True:
-            if not request['requestid'] in self._pending_requests:
+            if 'response' in self._pending_requests[request['requestid']]:
+                msg = self._pending_requests[request['requestid']]['response']
+
+                # Validate service
+                resp_service = msg['response'][0]['service']
+                if resp_service != request['service']:
+                    raise UnexpectedResponse(
+                        msg, 'unexpected service: {}'.format(
+                            resp_service))
+
+                # Validate command
+                resp_command = msg['response'][0]['command']
+                if resp_command != request['command']:
+                    raise UnexpectedResponse(
+                        msg, 'unexpected command: {}'.format(
+                            resp_command))
+
+                # Validate response code
+                resp_code = msg['response'][0]['content']['code']
+                if resp_code != 0:
+                    raise UnexpectedResponseCode(
+                        msg,
+                        'unexpected response code: {}, msg is \'{}\''.format(
+                            resp_code,
+                            msg['response'][0]['content']['msg']))
+
+                del self._pending_requests[request['requestid']]
                 break
-            await self.handle_message()
+            if self._message_lock.locked():
+                await self._pending_requests[request['requestid']]['event'].wait()
+            else:
+                await self.handle_message()
 
     async def _service_op(self, symbols, service, command, field_type,
                           *, fields=None):
@@ -228,70 +262,47 @@ class StreamClient(EnumEnforcer):
         await self._send_and_await_response(request)
 
     async def handle_message(self):
-        msg = await self._receive()
+        async with self._message_lock:
+            msg = await self._receive()
 
-        # response
-        if 'response' in msg:
-            # Validate request ID
-            resp_request_id = msg['response'][0]['requestid']
-            if not resp_request_id in self._pending_requests:
-                raise UnexpectedResponse(
-                    msg, 'unexpected requestid: {}'.format(
-                        resp_request_id))
-            
-            request = self._pending_requests[resp_request_id]
+            # response
+            if 'response' in msg:
+                # Validate request ID
+                resp_request_id = msg['response'][0]['requestid']
+                if not resp_request_id in self._pending_requests:
+                    raise UnexpectedResponse(
+                        msg, 'unexpected requestid: {}'.format(
+                            resp_request_id))
 
-            # Validate service
-            resp_service = msg['response'][0]['service']
-            if resp_service != request['service']:
-                raise UnexpectedResponse(
-                    msg, 'unexpected service: {}'.format(
-                        resp_service))
+                self._pending_requests[resp_request_id]['response'] = msg
+                self._pending_requests[resp_request_id]['event'].set()
 
-            # Validate command
-            resp_command = msg['response'][0]['command']
-            if resp_command != request['command']:
-                raise UnexpectedResponse(
-                    msg, 'unexpected command: {}'.format(
-                        resp_command))
+            # data
+            if 'data' in msg:
+                for d in msg['data']:
+                    if d['service'] in self._handlers:
+                        for handler in self._handlers[d['service']]:
+                            labeled_d = handler.label_message(d)
+                            h = handler(labeled_d)
 
-            # Validate response code
-            resp_code = msg['response'][0]['content']['code']
-            if resp_code != 0:
-                raise UnexpectedResponseCode(
-                    msg,
-                    'unexpected response code: {}, msg is \'{}\''.format(
-                        resp_code,
-                        msg['response'][0]['content']['msg']))
+                            # Check if h is an awaitable, if so schedule it
+                            # This allows for both sync and async handlers
+                            if inspect.isawaitable(h):
+                                asyncio.ensure_future(h)
 
-            del self._pending_requests[resp_request_id]
+            # notify
+            if 'notify' in msg:
+                for d in msg['notify']:
+                    if 'heartbeat' in d:
+                        pass
+                    else:
+                        for handler in self._handlers[d['service']]:
+                            h = handler(d)
 
-        # data
-        if 'data' in msg:
-            for d in msg['data']:
-                if d['service'] in self._handlers:
-                    for handler in self._handlers[d['service']]:
-                        labeled_d = handler.label_message(d)
-                        h = handler(labeled_d)
-
-                        # Check if h is an awaitable, if so schedule it
-                        # This allows for both sync and async handlers
-                        if inspect.isawaitable(h):
-                            asyncio.ensure_future(h)
-
-        # notify
-        if 'notify' in msg:
-            for d in msg['notify']:
-                if 'heartbeat' in d:
-                    pass
-                else:
-                    for handler in self._handlers[d['service']]:
-                        h = handler(d)
-
-                        # Check if h is an awaitable, if so schedule oit
-                        # This allows for both sync and async handlers
-                        if inspect.isawaitable(h):
-                            asyncio.ensure_future(h)
+                            # Check if h is an awaitable, if so schedule oit
+                            # This allows for both sync and async handlers
+                            if inspect.isawaitable(h):
+                                asyncio.ensure_future(h)
 
     ##########################################################################
     # LOGIN

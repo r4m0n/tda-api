@@ -3621,14 +3621,14 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(self.success_response(2, 'CHART_EQUITY', 'ADD'))]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
 
@@ -3648,15 +3648,15 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(failed_add_response)]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        with self.assertRaises(tda.streaming.UnexpectedResponseCode):
-            await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        with self.assertRaises(tda.streaming.UnexpectedResponseCode):
+            await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
 
@@ -3676,15 +3676,15 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(failed_add_response)]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        with self.assertRaises(tda.streaming.UnexpectedResponse):
-            await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        with self.assertRaises(tda.streaming.UnexpectedResponse):
+            await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
 
