@@ -370,6 +370,22 @@ class StreamClient(EnumEnforcer):
         await self._send_and_await_response(request)
 
     ##########################################################################
+    # LOGOUT
+
+    async def logout(self):
+        '''
+        `Official Documentation <https://developer.tdameritrade.com/content/
+        streaming-data#_Toc504640576>`__
+        Sends logout request, which gracefully closes the connection.
+        '''
+
+        request, request_id = self._make_request(
+            service='ADMIN', command='LOGOUT',
+            parameters={})
+
+        await self._send_and_await_response(request)
+
+    ##########################################################################
     # QOS
 
     class QOSLevel(Enum):
