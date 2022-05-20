@@ -7,6 +7,7 @@ from .utils import (account_principals, has_diff, MockResponse,
 import asynctest
 from unittest.mock import ANY, call, MagicMock, Mock
 from tda import streaming
+import asyncio
 
 StreamClient = streaming.StreamClient
 
@@ -4406,14 +4407,14 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(self.success_response(2, 'CHART_EQUITY', 'ADD'))]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
 
@@ -4433,15 +4434,15 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(failed_add_response)]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        with self.assertRaises(tda.streaming.UnexpectedResponseCode):
-            await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        with self.assertRaises(tda.streaming.UnexpectedResponseCode):
+            await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
 
@@ -4461,17 +4462,71 @@ class StreamClientTest(asynctest.TestCase):
             json.dumps(stream_item),
             json.dumps(failed_add_response)]
 
-        await self.client.chart_equity_subs(['GOOG,MSFT'])
-        with self.assertRaises(tda.streaming.UnexpectedResponse):
-            await self.client.chart_equity_add(['INTC'])
-
         handler = Mock()
         async_handler = asynctest.CoroutineMock()
         self.client.add_chart_equity_handler(handler)
         self.client.add_chart_equity_handler(async_handler)
-        await self.client.handle_message()
+
+        await self.client.chart_equity_subs(['GOOG,MSFT'])
+        with self.assertRaises(tda.streaming.UnexpectedResponse):
+            await self.client.chart_equity_add(['INTC'])
+
         handler.assert_called_once_with(stream_item['data'][0])
         async_handler.assert_called_once_with(stream_item['data'][0])
+
+    @no_duplicates
+    @asynctest.patch('tda.streaming.ws_client.connect', new_callable=asynctest.CoroutineMock)
+    async def test_messages_routing_from_multiple_coroutines(
+            self, ws_connect):
+        socket = await self.login_and_get_socket(ws_connect)
+
+        handler_main = Mock()
+
+        async def main_loop(self):
+            self.client.add_chart_equity_handler(handler_main)
+            await self.client.chart_equity_subs(['GOOG,MSFT'])
+            await asyncio.sleep(0.3)
+            await self.client.handle_message()
+
+        handler_success = Mock()
+
+        async def success_test(self):
+            await asyncio.sleep(0.1)
+            await self.client.account_activity_sub()
+            handler_success()
+
+        handler_failure = Mock()
+
+        async def failure_test(self):
+            await asyncio.sleep(0.2)
+            try:
+                await self.client.account_activity_sub()
+            except tda.streaming.UnexpectedResponseCode:
+                handler_failure()
+
+        stream_item = self.streaming_entry('CHART_EQUITY', 'SUBS')
+
+        failed_response = self.success_response(3, 'ACCT_ACTIVITY', 'SUBS')
+        failed_response['response'][0]['content']['code'] = 21
+
+        async def delayedvalue(delay, value):
+            await asyncio.sleep(delay)
+            return value
+
+        socket.recv.side_effect = [
+            delayedvalue(0, json.dumps(self.success_response(1, 'CHART_EQUITY', 'SUBS'))),
+            delayedvalue(0.3, json.dumps(failed_response)),
+            delayedvalue(0.3, json.dumps(self.success_response(2, 'ACCT_ACTIVITY', 'SUBS'))),
+            delayedvalue(0, json.dumps(stream_item))]
+
+        await asyncio.gather(
+            main_loop(self),
+            success_test(self),
+            failure_test(self))
+
+        handler_main.assert_called_once_with(stream_item['data'][0])
+        handler_success.assert_called_once()
+        handler_failure.assert_called_once()
 
     @no_duplicates
     @asynctest.patch('tda.streaming.ws_client.connect', new_callable=asynctest.CoroutineMock)
